@@ -1,7 +1,10 @@
 import React from 'react';
 import { Tool } from '../types';
 import * as Icons from 'lucide-react';
+<<<<<<< HEAD
 import { Link } from 'react-router-dom';
+=======
+>>>>>>> origin/main
 
 interface ToolCardProps {
   tool: Tool;
@@ -11,10 +14,14 @@ export function ToolCard({ tool }: ToolCardProps) {
   const IconComponent = Icons[tool.icon as keyof typeof Icons];
 
   return (
+<<<<<<< HEAD
     <Link
       to={tool.path}
       className="group p-8 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-300 border border-blue-50 hover:border-blue-100 text-left block"
     >
+=======
+    <button className="group p-8 bg-white rounded-xl shadow-sm hover:shadow-md transition-all duration-300 border border-blue-50 hover:border-blue-100 text-left">
+>>>>>>> origin/main
       <div className="space-y-4">
         <div className="p-4 bg-blue-50 rounded-full w-fit group-hover:bg-blue-100 transition-colors">
           <IconComponent className="w-8 h-8 text-blue-600" />
@@ -27,6 +34,10 @@ export function ToolCard({ tool }: ToolCardProps) {
           </span>
         </div>
       </div>
+<<<<<<< HEAD
     </Link>
+=======
+    </button>
+>>>>>>> origin/main
   );
 }

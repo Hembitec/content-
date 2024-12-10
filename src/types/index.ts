@@ -9,7 +9,10 @@ export interface Tool {
   title: string;
   description: string;
   icon: string;
+<<<<<<< HEAD
   path: string;
+=======
+>>>>>>> origin/main
 }
 
 export interface Testimonial {

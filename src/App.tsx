@@ -1,4 +1,5 @@
 import React from 'react';
+<<<<<<< HEAD
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Landing } from './pages/Landing';
 import { Dashboard } from './pages/Dashboard';
@@ -25,10 +26,29 @@ function AppRoutes() {
         <Route path="/tools/nlp-generator" element={<PrivateRoute><NLPGenerator /></PrivateRoute>} />
         <Route path="/tools/social-converter" element={<PrivateRoute><SocialMediaConverter /></PrivateRoute>} />
       </Routes>
+=======
+import { Landing } from './pages/Landing';
+import { Dashboard } from './components/Dashboard';
+import { Header } from './components/header/Header';
+import { User } from './types';
+
+const currentUser: User | null = null;
+
+function App() {
+  if (!currentUser) {
+    return <Landing />;
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white flex flex-col">
+      <Header user={currentUser} />
+      <Dashboard />
+>>>>>>> origin/main
     </div>
   );
 }
 
+<<<<<<< HEAD
 function App() {
   return (
     <Router>
@@ -41,4 +61,6 @@ function App() {
   );
 }
 
+=======
+>>>>>>> origin/main
 export default App;

@@ -1,4 +1,5 @@
 import React from 'react';
+<<<<<<< HEAD
 import { AuthForm } from '../components/auth/AuthForm';
 import { FileSearch, Brain, Share2, Zap, CheckCircle } from 'lucide-react';
 
@@ -272,6 +273,27 @@ function FeatureCard({ icon: Icon, title, description }) {
       </div>
       <h3 className="text-2xl font-medium font-semibold text-gray-900 dark:text-white mb-4">{title}</h3>
       <p className="text-gray-600 dark:text-gray-300 font-inter leading-relaxed">{description}</p>
+=======
+import { Hero } from '../components/landing/Hero';
+import { Features } from '../components/landing/Features';
+import { Testimonials } from '../components/landing/Testimonials';
+import { AuthForm } from '../components/auth/AuthForm';
+import { Header } from '../components/header/Header';
+
+export function Landing() {
+  return (
+    <div className="min-h-screen bg-white">
+      <Header user={null} />
+      <Hero />
+      <Features />
+      <Testimonials />
+      
+      <section id="auth-section" className="py-24 bg-white">
+        <div className="max-w-7xl mx-auto px-6">
+          <AuthForm />
+        </div>
+      </section>
+>>>>>>> origin/main
     </div>
   );
 }
