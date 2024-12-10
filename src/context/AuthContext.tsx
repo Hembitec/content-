@@ -1,101 +1,136 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { 
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut as firebaseSignOut,
-  onAuthStateChanged,
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import {
   GoogleAuthProvider,
   signInWithPopup,
+  signOut as firebaseSignOut,
+  onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
   updateProfile,
-  User as FirebaseUser
+  User
 } from 'firebase/auth';
 import { auth } from '../config/firebase';
-
-interface User {
-  id: string;
-  name: string | null;
-  email: string | null;
-  coins: number;
-}
+import { useNavigate } from 'react-router-dom';
 
 interface AuthContextType {
   user: User | null;
-  loading: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, name: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<void>;
+  signUpWithEmail: (email: string, password: string, name: string) => Promise<void>;
   signOut: () => Promise<void>;
-  updateUserCoins: (newBalance: number) => void;
+  error: string | null;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser: FirebaseUser | null) => {
-      if (firebaseUser) {
-        setUser({
-          id: firebaseUser.uid,
-          name: firebaseUser.displayName,
-          email: firebaseUser.email,
-          coins: 50
-        });
-      } else {
-        setUser(null);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!user && window.location.pathname !== '/') {
+        navigate('/');
       }
-      setLoading(false);
+      setUser(user);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [navigate]);
 
-  const signUp = async (email: string, password: string, name: string) => {
-    const { user: firebaseUser } = await createUserWithEmailAndPassword(auth, email, password);
-    await updateProfile(firebaseUser, { displayName: name });
-  };
-
-  const signIn = async (email: string, password: string) => {
-    await signInWithEmailAndPassword(auth, email, password);
+  const getErrorMessage = (error: string) => {
+    switch (error) {
+      case 'Firebase: Error (auth/invalid-credential).':
+        return 'Incorrect email or password. Please try again.';
+      case 'Firebase: Error (auth/email-already-in-use).':
+        return 'An account with this email already exists.';
+      case 'Firebase: Error (auth/weak-password).':
+        return 'Password should be at least 6 characters long.';
+      case 'Firebase: Error (auth/invalid-email).':
+        return 'Please enter a valid email address.';
+      case 'Firebase: Error (auth/user-not-found).':
+        return 'No account found with this email.';
+      case 'Firebase: Error (auth/too-many-requests).':
+        return 'Too many attempts. Please try again later.';
+      case 'Firebase: Error (auth/popup-closed-by-user).':
+        return 'Sign in was cancelled. Please try again.';
+      case 'Firebase: Error (auth/cancelled-popup-request).':
+        return 'Another sign in attempt is in progress.';
+      case 'Firebase: Error (auth/popup-blocked).':
+        return 'Sign in popup was blocked. Please allow popups for this site.';
+      default:
+        return 'Something went wrong. Please try again.';
+    }
   };
 
   const signInWithGoogle = async () => {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    try {
+      setError(null);
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({
+        prompt: 'select_account'
+      });
+      await signInWithPopup(auth, provider);
+    } catch (err: any) {
+      const errorMessage = getErrorMessage(err.message);
+      throw new Error(errorMessage);
+    }
+  };
+
+  const signInWithEmail = async (email: string, password: string) => {
+    try {
+      setError(null);
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (err: any) {
+      const errorMessage = getErrorMessage(err.message);
+      throw new Error(errorMessage);
+    }
+  };
+
+  const signUpWithEmail = async (email: string, password: string, name: string) => {
+    try {
+      setError(null);
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      await updateProfile(userCredential.user, {
+        displayName: name
+      });
+      setUser({ ...userCredential.user, displayName: name });
+    } catch (err: any) {
+      const errorMessage = getErrorMessage(err.message);
+      throw new Error(errorMessage);
+    }
   };
 
   const signOut = async () => {
-    await firebaseSignOut(auth);
-    setUser(null);
-  };
-
-  const updateUserCoins = (newBalance: number) => {
-    if (user) {
-      setUser({ ...user, coins: newBalance });
-      // Here you would typically also update the user's coin balance in your backend/database
+    try {
+      await firebaseSignOut(auth);
+      navigate('/');
+    } catch (err: any) {
+      const errorMessage = getErrorMessage(err.message);
+      throw new Error(errorMessage);
     }
   };
 
   return (
-    <AuthContext.Provider value={{
-      user,
-      loading,
-      signIn,
-      signUp,
-      signOut,
-      signInWithGoogle,
-      updateUserCoins
-    }}>
-      {!loading && children}
+    <AuthContext.Provider
+      value={{
+        user,
+        signInWithGoogle,
+        signInWithEmail,
+        signUpWithEmail,
+        signOut,
+        error
+      }}
+    >
+      {children}
     </AuthContext.Provider>
   );
 }
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
+  if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;

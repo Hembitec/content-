@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { analyzeContent } from '../../services/geminiService';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { ErrorMessage } from '../../components/ErrorMessage';
-import { FiTarget, FiKey, FiList, FiSearch, FiFileText, FiAlertCircle, FiCopy, FiCheck, FiMoon, FiSun, FiArrowLeft } from 'react-icons/fi';
+import { ArrowLeft, FileText, Wand2 } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { useTheme } from '../../context/ThemeContext';
-import { useAuth } from '../../context/AuthContext';
 import clsx from 'clsx';
+import { Header } from '../../components/layout/Header';
+import { Link } from 'react-router-dom';
 
 const ContentAnalyzer: React.FC = () => {
   const navigate = useNavigate();
@@ -14,37 +16,7 @@ const ContentAnalyzer: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<any>(null);
-  const [copiedSections, setCopiedSections] = useState<{ [key: string]: boolean }>({});
   const { darkMode } = useTheme();
-  const { user, updateUserCoins } = useAuth();
-
-  const ANALYSIS_COST = 10;
-
-  const handleCopy = async (text: string, section: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedSections({ ...copiedSections, [section]: true });
-      setTimeout(() => {
-        setCopiedSections({ ...copiedSections, [section]: false });
-      }, 2000);
-    } catch (err) {
-      console.error('Failed to copy text:', err);
-    }
-  };
-
-  // Helper function to format section content for copying
-  const formatSectionContent = (section: any, sectionType: string) => {
-    switch (sectionType) {
-      case 'keywords':
-        return section.map((kw: any) => `${kw.word}`).join('\n');
-      case 'recommendations':
-        return section.join('\n');
-      case 'improvements':
-        return section.map((imp: any) => `${imp.priority.toUpperCase()}: ${imp.suggestion}`).join('\n');
-      default:
-        return Array.isArray(section) ? section.join('\n') : section;
-    }
-  };
 
   const handleAnalyze = async () => {
     if (!content.trim()) {
@@ -52,28 +24,31 @@ const ContentAnalyzer: React.FC = () => {
       return;
     }
 
-    if (!user || user.coins < ANALYSIS_COST) {
-      setError('Insufficient coins. You need 10 coins to analyze content.');
+    // Count words
+    const wordCount = content.trim().split(/\s+/).length;
+    if (wordCount < 30) {
+      setError('Please enter at least 30 words for accurate analysis');
+      return;
+    }
+
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+      setError('API key is missing. Please check your environment variables.');
       return;
     }
 
     setIsLoading(true);
     setError(null);
-    setAnalysis(null); // Reset previous analysis
+    setAnalysis(null);
 
     try {
       console.log('Starting content analysis...');
-      
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error('API key is missing. Please check your environment variables.');
-      }
-
       const result = await analyzeContent(content, apiKey);
       
-      // Update coins only after successful analysis
-      updateUserCoins(user.coins - ANALYSIS_COST);
-      
+      if (!result) {
+        throw new Error('Analysis failed. Please try again.');
+      }
+
       setAnalysis(result);
     } catch (err: any) {
       console.error('Analysis error:', err);
@@ -84,550 +59,816 @@ const ContentAnalyzer: React.FC = () => {
     }
   };
 
-  // Helper function to safely render text content
-  const renderTextContent = (content: any): string => {
-    if (typeof content === 'string') return content;
-    if (content && typeof content === 'object') {
-      if (content.description) return content.description;
-      if (content.text) return content.text;
-      if (content.type && content.description) return `${content.type}: ${content.description}`;
-    }
-    return String(content || '');
+  const handleTransferToGenerator = () => {
+    if (!analysis) return;
+
+    // Safely extract and format improvements
+    const formatImprovements = (items: any[] | undefined) => {
+      if (!Array.isArray(items)) return [];
+      return items.map(item => typeof item === 'string' ? item : item.suggestion || '').filter(Boolean);
+    };
+
+    // Extract keywords from various possible structures
+    const extractKeywords = (keywordData: any) => {
+      if (typeof keywordData === 'string') return keywordData;
+      if (typeof keywordData?.word === 'string') return keywordData.word;
+      return null;
+    };
+
+    // Get all keywords from the analysis
+    const getAllKeywords = () => {
+      const keywordSources = [
+        // Main keywords
+        ...(Array.isArray(analysis.keywords?.main) ? analysis.keywords.main : []),
+        ...(Array.isArray(analysis.mainKeywords) ? analysis.mainKeywords : []),
+        // LSI keywords
+        ...(Array.isArray(analysis.keywords?.lsi) ? analysis.keywords.lsi : []),
+        ...(Array.isArray(analysis.lsiKeywords) ? analysis.lsiKeywords : []),
+        // Related keywords
+        ...(Array.isArray(analysis.keywords?.related) ? analysis.keywords.related : []),
+        ...(Array.isArray(analysis.relatedKeywords) ? analysis.relatedKeywords : []),
+        // Semantic keywords
+        ...(Array.isArray(analysis.semanticKeywords) ? analysis.semanticKeywords : []),
+        // SEO keywords
+        ...(Array.isArray(analysis.seo?.mainKeywords) ? analysis.seo.mainKeywords : []),
+        ...(Array.isArray(analysis.seo?.lsiKeywords) ? analysis.seo.lsiKeywords : [])
+      ];
+
+      return [...new Set(
+        keywordSources
+          .flat()
+          .map(extractKeywords)
+          .filter(Boolean)
+      )];
+    };
+
+    // Get content questions from the correct path in the analysis
+    const getContentQuestions = () => {
+      const questions = analysis.keywords?.questions || 
+                       analysis.contentQuestions || 
+                       analysis.questions || 
+                       analysis.improvementSuggestions?.content?.filter(item => 
+                         item.type === 'question' || 
+                         item.suggestion?.toLowerCase().includes('?')
+                       )?.map(item => item.suggestion) || 
+                       [];
+      
+      return Array.isArray(questions) ? questions : [];
+    };
+
+    // Get all keywords
+    const allKeywords = getAllKeywords();
+
+    // Format additional notes with error handling
+    const additionalNotes = [
+      '# Content Analysis Results\n',
+      '## Keywords Found:',
+      ...allKeywords.map(k => `- ${k}`),
+      '\n## Improvements:',
+      ...formatImprovements(analysis.improvementSuggestions?.content)
+        .map(imp => `- ${imp}`),
+      '\n## Style Suggestions:',
+      ...formatImprovements(analysis.improvementSuggestions?.style)
+        .map(s => `- ${s}`),
+      '\n## SEO Suggestions:',
+      ...formatImprovements(analysis.improvementSuggestions?.seo)
+        .map(s => `- ${s}`),
+      '\n## Content Questions:',
+      ...getContentQuestions()
+        .map(q => `- ${q}`)
+    ].filter(Boolean).join('\n');
+
+    // Log the data being transferred
+    console.log('Transferring analysis data:', {
+      title: analysis.targetKeyword,
+      keywords: allKeywords,
+      questions: getContentQuestions(),
+      additionalNotes
+    });
+
+    // Navigate to NLP Generator with data
+    navigate('/tools/nlp-generator', {
+      state: {
+        fromAnalysis: true,
+        title: analysis.targetKeyword || '',
+        keywords: allKeywords,
+        additionalNotes: additionalNotes
+      }
+    });
   };
 
   return (
-    <div className={`min-h-screen bg-${darkMode ? '[#13141a]' : 'white'} py-8`}>
-      <div className="max-w-4xl mx-auto px-4">
-        <div className="flex justify-between items-center mb-6">
-          <button 
-            onClick={() => navigate('/dashboard')}
-            className="flex items-center text-gray-500 hover:text-blue-500 dark:text-gray-400 dark:hover:text-blue-400 transition-colors"
-          >
-            <FiArrowLeft className="mr-2" />
-            Back to Dashboard
-          </button>
-          <h2 className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Content Optimizer</h2>
+    <div className={clsx(
+      'min-h-screen transition-colors duration-200',
+      darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'
+    )}>
+      <Header />
+      
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Back Button */}
+        <Link
+          to="/dashboard"
+          className={clsx(
+            'inline-flex items-center gap-2 mb-8 text-sm',
+            darkMode ? 'text-gray-400 hover:text-gray-300' : 'text-gray-600 hover:text-gray-700'
+          )}
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to Dashboard
+        </Link>
+
+        {/* Tool Title */}
+        <div className="mb-8">
+          <h2 className={clsx(
+            'text-3xl font-bold flex items-center gap-3 mb-3',
+            darkMode 
+              ? 'bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent'
+              : 'bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent'
+          )}>
+            Content Analyzer
+            <FileText className="text-2xl" />
+          </h2>
+          <p className={clsx(
+            'text-lg',
+            darkMode ? 'text-gray-400' : 'text-gray-600'
+          )}>
+            Analyze your content for SEO optimization and improvement suggestions
+          </p>
         </div>
 
-        {/* Text Input Area */}
-        <div className="mt-6">
+        {/* Content Input */}
+        <div className={clsx(
+          'rounded-2xl border backdrop-blur-sm p-6',
+          darkMode 
+            ? 'bg-gray-800/30 border-gray-700/30'
+            : 'bg-white/80 border-gray-200/80 shadow-lg'
+        )}>
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            placeholder="Paste your content here to analyze..."
             className={clsx(
-              "w-full min-h-[200px] p-4 rounded-lg resize-y outline-none transition-all duration-200",
-              "border-2 focus:ring-2 ring-offset-2",
-              darkMode 
-                ? "bg-[#2c2e33] border-[#1f2024] text-gray-200 placeholder-gray-500 focus:border-blue-500 focus:ring-blue-500/20" 
-                : "bg-white border-gray-200 text-gray-800 placeholder-gray-400 focus:border-blue-500 focus:ring-blue-500/20"
+              'w-full h-64 p-4 rounded-xl border focus:ring-2 focus:outline-none transition-colors duration-200',
+              darkMode
+                ? 'bg-gray-900/50 border-gray-700 focus:border-purple-500/50 focus:ring-purple-500/20 text-white placeholder-gray-500'
+                : 'bg-white border-gray-200 focus:border-purple-500 focus:ring-purple-500/20 text-gray-900 placeholder-gray-400'
             )}
+            placeholder="Enter your content here..."
           />
-        </div>
-
-        {/* Analyze Button */}
-        <div className="mt-4">
-          <button
-            onClick={handleAnalyze}
-            disabled={!content || isLoading || !user || user.coins < ANALYSIS_COST}
-            className={clsx(
-              "w-full h-[46px] py-3 px-4 rounded-lg font-medium transition-all duration-200",
-              "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500",
-              "flex items-center justify-center gap-2",
-              !content || isLoading || !user || user.coins < ANALYSIS_COST
-                ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                : "bg-blue-500 hover:bg-blue-600 text-white shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40"
-            )}
-          >
-            {isLoading ? (
-              <div className="flex items-center justify-center gap-2 min-w-[120px]">
-                <LoadingSpinner className="w-4 h-4 animate-spin" />
-                <span className="text-sm">Analyzing...</span>
+          <div className="flex justify-end mt-4">
+            <motion.button
+              onClick={handleAnalyze}
+              disabled={isLoading || !content.trim()}
+              className={clsx(
+                'inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm w-[160px]',
+                'bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600',
+                'text-white shadow-md shadow-purple-500/10 disabled:opacity-50 disabled:cursor-not-allowed',
+                'active:translate-y-[1px]'
+              )}
+            >
+              <div className="flex items-center justify-center gap-2 w-full">
+                {isLoading ? (
+                  <>
+                    <LoadingSpinner className="w-4 h-4 border-white" />
+                    <span className="whitespace-nowrap">Analyzing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-4 h-4" />
+                    <span className="whitespace-nowrap">Analyze Content</span>
+                  </>
+                )}
               </div>
-            ) : (
-              <div className="flex items-center justify-center gap-2 min-w-[120px]">
-                <span>Analyze Content</span>
-                <div className={clsx(
-                  "flex items-center gap-1 px-2 py-0.5 rounded-full text-xs",
-                  darkMode 
-                    ? "bg-[#1f2024] text-gray-300" 
-                    : "bg-blue-600/20 text-white"
-                )}>
-                  <FiMoon className="w-3.5 h-3.5" />
-                  <span>10</span>
-                </div>
-              </div>
-            )}
-          </button>
-          <div className={clsx(
-            "mt-2 text-sm text-center",
-            darkMode ? "text-gray-400" : "text-gray-600"
-          )}>
-            Available Coins: {user?.coins || 0}
+            </motion.button>
           </div>
+          {error && <ErrorMessage 
+            message={error} 
+            type={error.includes('30 words') ? 'info' : 'error'} 
+            className="mt-4" 
+          />}
         </div>
 
-        {error && <ErrorMessage message={error} />}
-
+        {/* Analysis Results */}
         {analysis && (
-          <div className="space-y-6 mt-8">
-            {/* Analysis Sections Container */}
-            <div className={clsx(
-              "rounded-lg p-6 space-y-6",
-              darkMode ? "bg-[#1a1b1e]" : "bg-gray-50"
-            )}>
-              {/* Target Keyword */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex items-center gap-2 mb-4">
-                  <FiTarget className="w-5 h-5 text-blue-500" />
-                  <h2 className="text-lg font-semibold">Target Keyword</h2>
-                </div>
-                <div className={`${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                  {analysis.keywords.main[0]?.word}
-                </div>
-              </div>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.2 }}
+            className="space-y-6 mt-8"
+          >
+            {/* Target Keyword */}
+            {analysis.targetKeyword && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.1 }}
+              >
+                <h2 className={clsx(
+                  'text-2xl font-bold mb-3',
+                  darkMode ? 'text-purple-400' : 'text-purple-600'
+                )}>
+                  Target Keyword
+                </h2>
+                <p className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                  {analysis.targetKeyword}
+                </p>
+              </motion.div>
+            )}
 
-              {/* Main Keywords */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <FiKey className="w-5 h-5 text-blue-500" /> Main Keywords
-                  </h2>
-                  <button 
-                    className={clsx(
-                      "p-1 transition-colors",
-                      darkMode 
-                        ? "text-gray-400 hover:text-blue-400" 
-                        : "text-gray-600 hover:text-blue-600"
-                    )}
-                    onClick={() => handleCopy(formatSectionContent(analysis.keywords.main, 'keywords'), 'mainKeywords')}
-                  >
-                    {copiedSections['mainKeywords'] ? 
-                      <FiCheck className="w-5 h-5 text-green-400" /> : 
-                      <FiCopy className="w-5 h-5" />
-                    }
-                  </button>
-                </div>
+            {/* Main Keywords */}
+            {analysis.keywords?.main && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.2 }}
+              >
+                <h2 className={clsx(
+                  'text-2xl font-bold mb-3',
+                  darkMode ? 'text-purple-400' : 'text-purple-600'
+                )}>
+                  Main Keywords
+                </h2>
                 <div className="flex flex-wrap gap-2">
-                  {analysis.keywords.main.map((keyword: any, i: number) => (
-                    <span
-                      key={i}
-                      className={`px-3 py-1.5 rounded-full text-sm ${
+                  {analysis.keywords.main.map((keyword: any, index: number) => (
+                    <motion.div
+                      key={index}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.05 * index }}
+                      className={clsx(
+                        'px-3 py-1.5 rounded-full text-sm font-medium transition-all',
+                        'hover:scale-105 cursor-default',
                         darkMode
-                          ? 'bg-[#1f2024] text-gray-300'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
+                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                          : 'bg-purple-100 text-purple-700 border border-purple-200'
+                      )}
                     >
                       {keyword.word}
-                    </span>
+                    </motion.div>
                   ))}
                 </div>
-              </div>
+              </motion.div>
+            )}
 
-              {/* LSI Keywords */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <FiList className="w-5 h-5 text-blue-500" /> LSI Keywords
-                  </h2>
-                  <button 
-                    className={clsx(
-                      "p-1 transition-colors",
-                      darkMode 
-                        ? "text-gray-400 hover:text-blue-400" 
-                        : "text-gray-600 hover:text-blue-600"
-                    )}
-                    onClick={() => handleCopy(formatSectionContent(analysis.keywords.lsi, 'keywords'), 'lsiKeywords')}
-                  >
-                    {copiedSections['lsiKeywords'] ? 
-                      <FiCheck className="w-5 h-5 text-green-400" /> : 
-                      <FiCopy className="w-5 h-5" />
-                    }
-                  </button>
-                </div>
+            {/* LSI Keywords */}
+            {analysis.keywords?.lsi && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.3 }}
+              >
+                <h2 className={clsx(
+                  'text-2xl font-bold mb-3',
+                  darkMode ? 'text-purple-400' : 'text-purple-600'
+                )}>
+                  LSI Keywords
+                </h2>
                 <div className="flex flex-wrap gap-2">
-                  {analysis.keywords.lsi.map((keyword: any, i: number) => (
-                    <span
-                      key={i}
-                      className={`px-3 py-1.5 rounded-full text-sm ${
+                  {analysis.keywords.lsi.map((keyword: any, index: number) => (
+                    <motion.div
+                      key={index}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.05 * index }}
+                      className={clsx(
+                        'px-3 py-1.5 rounded-full text-sm font-medium transition-all',
+                        'hover:scale-105 cursor-default',
                         darkMode
-                          ? 'bg-[#1f2024] text-gray-300'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
+                          ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                          : 'bg-blue-100 text-blue-700 border border-blue-200'
+                      )}
                     >
                       {keyword.word}
-                    </span>
+                    </motion.div>
                   ))}
                 </div>
-              </div>
+              </motion.div>
+            )}
 
-              {/* SEO Analysis Section */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-2">
-                    <FiSearch className="w-5 h-5 text-blue-500" />
-                    <h2 className="text-lg font-semibold">SEO Analysis</h2>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={darkMode ? "text-gray-400" : "text-gray-700"}>Score:</span>
-                    <span className={clsx(
-                      "px-2 py-0.5 text-sm rounded-md font-medium",
-                      analysis.seo.score >= 80 ? 
-                        darkMode ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : 
-                        "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" :
-                      analysis.seo.score >= 60 ? 
-                        darkMode ? "bg-amber-500/20 text-amber-300 border border-amber-500/30" : 
-                        "bg-amber-500/20 text-amber-300 border border-amber-500/30" :
-                      darkMode ? "bg-rose-500/20 text-rose-300 border border-rose-500/30" : 
-                      "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                    )}>
-                      {analysis.seo.score}
-                    </span>
-                  </div>
+            {/* Related Keywords */}
+            {analysis.keywords?.related && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.4 }}
+              >
+                <h2 className={clsx(
+                  'text-2xl font-bold mb-3',
+                  darkMode ? 'text-purple-400' : 'text-purple-600'
+                )}>
+                  Related Keywords
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  {analysis.keywords.related.map((keyword: string, index: number) => (
+                    <motion.div
+                      key={index}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.05 * index }}
+                      className={clsx(
+                        'px-3 py-1.5 rounded-full text-sm font-medium transition-all',
+                        'hover:scale-105 cursor-default',
+                        darkMode
+                          ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                          : 'bg-green-100 text-green-700 border border-green-200'
+                      )}
+                    >
+                      {keyword}
+                    </motion.div>
+                  ))}
                 </div>
+              </motion.div>
+            )}
 
-                {/* SEO Recommendations */}
-                <div className="mb-4">
-                  <h5 className={clsx(
-                    "text-sm font-medium",
-                    darkMode ? "text-gray-400" : "text-gray-700"
-                  )}>
-                    Recommendations
-                  </h5>
-                  <ul className="list-disc list-inside text-gray-400 space-y-2">
-                    {analysis.seo?.recommendations?.map((recommendation: string, i: number) => (
-                      <li key={i} className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                        {recommendation}
+            {/* Content Questions */}
+            {analysis.keywords?.questions && Array.isArray(analysis.keywords.questions) && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.5 }}
+              >
+                <h2 className={clsx(
+                  'text-xl font-bold mb-6',
+                  darkMode ? 'text-purple-300' : 'text-purple-600'
+                )}>
+                  Content Questions
+                </h2>
+                <div className={clsx(
+                  'p-4 rounded-lg border',
+                  darkMode ? 'bg-gray-800/50 border-gray-700/50' : 'bg-gray-50 border-gray-200'
+                )}>
+                  <ul className="list-disc pl-5 space-y-1">
+                    {analysis.keywords.questions.map((question: string, index: number) => (
+                      <li key={index} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                        {question}
                       </li>
                     ))}
                   </ul>
                 </div>
+              </motion.div>
+            )}
 
-                {/* Content Gaps */}
-                <div className="mb-4">
-                  <h5 className={clsx(
-                    "text-sm font-medium",
-                    darkMode ? "text-gray-400" : "text-gray-700"
-                  )}>
-                    Content Gaps
-                  </h5>
-                  
-                  {/* Missing Topics */}
-                  <div className="mb-3">
-                    <h6 className={clsx(
-                      "text-sm",
-                      darkMode ? "text-gray-500" : "text-gray-700"
-                    )}>
-                      Missing Topics
-                    </h6>
-                    <ul className="list-disc list-inside text-gray-400 space-y-2">
-                      {analysis.seo?.contentGaps?.missingTopics?.map((topic: string, i: number) => (
-                        <li key={i} className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                          {topic}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  {/* Competitor Keywords */}
-                  <div>
-                    <h6 className={clsx(
-                      "text-sm",
-                      darkMode ? "text-gray-500" : "text-gray-700"
-                    )}>
-                      Competitor Keywords
-                    </h6>
-                    <div className="flex flex-wrap gap-2">
-                      {analysis.seo?.contentGaps?.competitorKeywords?.map((keyword: string, i: number) => (
-                        <span
-                          key={i}
-                          className={clsx(
-                            "px-3 py-1 rounded-full text-sm",
-                            darkMode 
-                              ? "bg-[#2c2e33] text-gray-300" 
-                              : "bg-gray-100 text-gray-700"
-                          )}
-                        >
-                          {keyword}
-                        </span>
-                      ))}
+            {/* Content Structure */}
+            {analysis.structure && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.7 }}
+                className="mb-12"
+              >
+                <h2 className={clsx(
+                  'text-xl font-bold mb-6',
+                  darkMode ? 'text-purple-300' : 'text-purple-600'
+                )}>
+                  Content Structure
+                </h2>
+                
+                {/* Headings in a single card */}
+                <div className={clsx(
+                  'p-4 rounded-lg border',
+                  darkMode ? 'bg-gray-800/50 border-gray-700/50' : 'bg-gray-50 border-gray-200'
+                )}>
+                  {/* H1 Headings */}
+                  {analysis.structure.headings.h1?.length > 0 && (
+                    <div className="mb-6">
+                      <h3 className={clsx(
+                        'text-lg font-medium mb-2',
+                        darkMode ? 'text-gray-300' : 'text-gray-700'
+                      )}>H1 Headings</h3>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {analysis.structure.headings.h1.map((heading: string, index: number) => (
+                          <li key={index} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                            {heading}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                  </div>
+                  )}
+                  
+                  {/* H2 Headings */}
+                  {analysis.structure.headings.h2?.length > 0 && (
+                    <div className="mb-6">
+                      <h3 className={clsx(
+                        'text-lg font-medium mb-2',
+                        darkMode ? 'text-gray-300' : 'text-gray-700'
+                      )}>H2 Headings</h3>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {analysis.structure.headings.h2.map((heading: string, index: number) => (
+                          <li key={index} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                            {heading}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
 
-                {/* Title Optimization */}
-                <div>
-                  <h5 className={clsx(
-                    "text-sm font-medium",
-                    darkMode ? "text-gray-400" : "text-gray-700"
-                  )}>
-                    Title Optimization
-                  </h5>
-                  <div className="space-y-3">
-                    <div>
-                      <h6 className={clsx(
-                        "text-sm",
-                        darkMode ? "text-gray-500" : "text-gray-700"
-                      )}>
-                        Current Title
-                      </h6>
-                      <p className={clsx(
-                        "p-2 rounded",
-                        darkMode ? "bg-[#1a1b1e] text-gray-300" : "bg-white text-gray-900"
-                      )}>
-                        {analysis.seo?.titleOptimization?.current}
-                      </p>
+                {/* Readability */}
+                {analysis.structure.readability && (
+                  <div className="mt-6 space-y-4">
+                    <h3 className={clsx(
+                      'text-lg font-medium mb-3',
+                      darkMode ? 'text-gray-300' : 'text-gray-700'
+                    )}>Readability</h3>
+                    <div className={clsx(
+                      'p-4 rounded-lg border',
+                      darkMode
+                        ? 'bg-gray-800/50 border-gray-700/50'
+                        : 'bg-gray-50 border-gray-200'
+                    )}>
+                      <div className="space-y-2">
+                        <p className={clsx(
+                          'font-medium mb-2',
+                          darkMode ? 'text-gray-300' : 'text-gray-700'
+                        )}>
+                          Score: {analysis.structure.readability.score}/100
+                        </p>
+                        <p className={clsx(
+                          'font-medium mt-4 mb-2',
+                          darkMode ? 'text-gray-300' : 'text-gray-700'
+                        )}>
+                          Level: {analysis.structure.readability.level}
+                        </p>
+                      </div>
+                      <div className="mt-4">
+                        <p className={clsx(
+                          'font-medium mb-2',
+                          darkMode ? 'text-gray-300' : 'text-gray-700'
+                        )}>Suggestions:</p>
+                        <ul className="list-disc pl-5 space-y-1">
+                          {analysis.structure.readability.suggestions.map((suggestion: string, index: number) => (
+                            <li key={index} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                              {suggestion}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     </div>
-                    <div>
-                      <h6 className={clsx(
-                        "text-sm",
-                        darkMode ? "text-gray-500" : "text-gray-700"
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* Improvement Suggestions */}
+            {analysis.improvementSuggestions && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.9 }}
+                className="space-y-6"
+              >
+                <h2 className={clsx(
+                  'text-2xl font-bold mb-3',
+                  darkMode ? 'text-purple-400' : 'text-purple-600'
+                )}>
+                  Improvement Suggestions
+                </h2>
+
+                {/* Content Suggestions */}
+                {analysis.improvementSuggestions.content?.length > 0 && (
+                  <div>
+                    <h3 className={clsx(
+                      'text-lg font-medium mb-3',
+                      darkMode ? 'text-blue-400' : 'text-blue-600'
+                    )}>
+                      Content Suggestions
+                    </h3>
+                    <div className="grid grid-cols-1 gap-2">
+                      {analysis.improvementSuggestions.content.map((item: any, index: number) => (
+                        <motion.div
+                          key={index}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.05 * index }}
+                          className={clsx(
+                            'p-4 rounded-xl border',
+                            item.priority === 'high' 
+                              ? darkMode 
+                                ? 'bg-red-500/10 border-red-500/30 text-red-200'
+                                : 'bg-red-50 border-red-200 text-red-700'
+                              : item.priority === 'medium'
+                                ? darkMode
+                                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-200'
+                                  : 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                                : darkMode
+                                  ? 'bg-blue-500/10 border-blue-500/30 text-blue-200'
+                                  : 'bg-blue-50 border-blue-200 text-blue-700'
+                          )}
+                        >
+                          <p className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                            {item.suggestion}
+                          </p>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Style Suggestions */}
+                {analysis.improvementSuggestions.style?.length > 0 && (
+                  <div>
+                    <h3 className={clsx(
+                      'text-lg font-medium mb-3',
+                      darkMode ? 'text-green-400' : 'text-green-600'
+                    )}>
+                      Style Suggestions
+                    </h3>
+                    <div className="grid grid-cols-1 gap-2">
+                      {analysis.improvementSuggestions.style.map((item: any, index: number) => (
+                        <motion.div
+                          key={index}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.05 * index }}
+                          className={clsx(
+                            'p-4 rounded-xl border',
+                            item.priority === 'high' 
+                              ? darkMode 
+                                ? 'bg-red-500/10 border-red-500/30 text-red-200'
+                                : 'bg-red-50 border-red-200 text-red-700'
+                              : item.priority === 'medium'
+                                ? darkMode
+                                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-200'
+                                  : 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                                : darkMode
+                                  ? 'bg-blue-500/10 border-blue-500/30 text-blue-200'
+                                  : 'bg-blue-50 border-blue-200 text-blue-700'
+                          )}
+                        >
+                          <p className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                            {item.suggestion}
+                          </p>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* SEO Suggestions */}
+                {analysis.improvementSuggestions.seo?.length > 0 && (
+                  <div>
+                    <h3 className={clsx(
+                      'text-lg font-medium mb-3',
+                      darkMode ? 'text-purple-400' : 'text-purple-600'
+                    )}>
+                      SEO Suggestions
+                    </h3>
+                    <div className="grid grid-cols-1 gap-2">
+                      {analysis.improvementSuggestions.seo.map((item: any, index: number) => (
+                        <motion.div
+                          key={index}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.05 * index }}
+                          className={clsx(
+                            'p-4 rounded-xl border',
+                            item.priority === 'high' 
+                              ? darkMode 
+                                ? 'bg-red-500/10 border-red-500/30 text-red-200'
+                                : 'bg-red-50 border-red-200 text-red-700'
+                              : item.priority === 'medium'
+                                ? darkMode
+                                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-200'
+                                  : 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                                : darkMode
+                                  ? 'bg-blue-500/10 border-blue-500/30 text-blue-200'
+                                  : 'bg-blue-50 border-blue-200 text-blue-700'
+                          )}
+                        >
+                          <p className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                            {item.suggestion}
+                          </p>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* Improvements */}
+            {analysis.improvements && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.6 }}
+                className="space-y-6"
+              >
+                <h2 className={clsx(
+                  'text-2xl font-bold mb-3',
+                  darkMode ? 'text-purple-400' : 'text-purple-600'
+                )}>
+                  Content Improvements
+                </h2>
+
+                {/* Priority Improvements */}
+                {Array.isArray(analysis.improvements.priority) && analysis.improvements.priority.length > 0 && (
+                  <div>
+                    <h3 className={clsx(
+                      'text-lg font-medium mb-3',
+                      darkMode ? 'text-orange-400' : 'text-orange-600'
+                    )}>
+                      Priority Improvements
+                    </h3>
+                    <div className="grid grid-cols-1 gap-2">
+                      {analysis.improvements.priority.map((improvement: string, index: number) => (
+                        <motion.div
+                          key={index}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.05 * index }}
+                          whileHover={{ x: 4 }}
+                          className={clsx(
+                            'p-4 rounded-xl flex items-start gap-3 group transition-all',
+                            darkMode
+                              ? 'bg-orange-500/10 text-orange-200 border border-orange-500/20'
+                              : 'bg-orange-50 text-orange-700 border border-orange-200'
+                          )}
+                        >
+                          <div className="mt-1 shrink-0 transition-transform group-hover:translate-x-1">
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                            </svg>
+                          </div>
+                          <div className="text-sm md:text-base">{improvement}</div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Additional Improvements */}
+                {Array.isArray(analysis.improvements.additional) && analysis.improvements.additional.length > 0 && (
+                  <div>
+                    <h3 className={clsx(
+                      'text-lg font-medium mb-3',
+                      darkMode ? 'text-blue-400' : 'text-blue-600'
+                    )}>
+                      Additional Improvements
+                    </h3>
+                    <div className="grid grid-cols-1 gap-2">
+                      {analysis.improvements.additional.map((improvement: string, index: number) => (
+                        <motion.div
+                          key={index}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.05 * index }}
+                          whileHover={{ x: 4 }}
+                          className={clsx(
+                            'p-4 rounded-xl flex items-start gap-3 group transition-all',
+                            darkMode
+                              ? 'bg-blue-500/10 text-blue-200 border border-blue-500/20'
+                              : 'bg-blue-50 text-blue-700 border border-blue-200'
+                          )}
+                        >
+                          <div className="mt-1 shrink-0 transition-transform group-hover:translate-x-1">
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </div>
+                          <div className="text-sm md:text-base">{improvement}</div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* SEO Analysis */}
+            {analysis.seo && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.8 }}
+              >
+                <h2 className={clsx(
+                  'text-2xl font-bold mb-3',
+                  darkMode ? 'text-purple-400' : 'text-purple-600'
+                )}>
+                  SEO Analysis
+                </h2>
+                <div className="space-y-6">
+                  <div>
+                    <p className={clsx(
+                      'font-medium mb-2',
+                      darkMode ? 'text-gray-300' : 'text-gray-700'
+                    )}>
+                      Score: {analysis.seo.score}/100
+                    </p>
+                    <div className={clsx(
+                      'p-4 rounded-lg border',
+                      darkMode
+                        ? 'bg-gray-800/50 border-gray-700/50'
+                        : 'bg-gray-50 border-gray-200'
+                    )}>
+                      <h3 className={clsx(
+                        'text-lg font-medium mb-2',
+                        darkMode ? 'text-gray-300' : 'text-gray-700'
+                      )}>Recommendations</h3>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {analysis.seo.recommendations.map((recommendation: string, index: number) => (
+                          <li key={index} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                            {recommendation}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+
+                  {/* Title Optimization */}
+                  <div>
+                    <h3 className={clsx(
+                      'text-lg font-medium mb-2',
+                      darkMode ? 'text-gray-300' : 'text-gray-700'
+                    )}>Title Optimization</h3>
+                    <div className={clsx(
+                      'p-4 rounded-lg border',
+                      darkMode
+                        ? 'bg-gray-800/50 border-gray-700/50'
+                        : 'bg-gray-50 border-gray-200'
+                    )}>
+                      <p className={clsx(
+                        'font-medium mb-2',
+                        darkMode ? 'text-gray-300' : 'text-gray-700'
                       )}>
-                        Suggested Titles
-                      </h6>
-                      <ul className="space-y-2">
-                        {analysis.seo?.titleOptimization?.suggestions?.map((title: string, i: number) => (
-                          <li key={i} className={clsx(
-                            "p-2 rounded",
-                            darkMode ? "bg-[#1a1b1e] text-gray-300" : "bg-white text-gray-900"
-                          )}>
+                        Current Title: {analysis.seo.titleOptimization.current}
+                      </p>
+                      <p className={clsx(
+                        'font-medium mt-4 mb-2',
+                        darkMode ? 'text-gray-300' : 'text-gray-700'
+                      )}>
+                        Suggested Titles:
+                      </p>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {analysis.seo.titleOptimization.suggestions.map((title: string, index: number) => (
+                          <li key={index} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
                             {title}
                           </li>
                         ))}
                       </ul>
                     </div>
                   </div>
-                </div>
-              </div>
 
-              {/* SEO Recommendations */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-2">
-                    <FiSearch className="w-5 h-5 text-blue-500" />
-                    <h2 className="text-lg font-semibold">SEO Recommendations</h2>
+                  {/* Content Gaps */}
+                  <div>
+                    <h3 className={clsx(
+                      'text-lg font-medium mb-2',
+                      darkMode ? 'text-gray-300' : 'text-gray-700'
+                    )}>Content Gaps</h3>
+                    <div className={clsx(
+                      'p-4 rounded-lg border',
+                      darkMode
+                        ? 'bg-gray-800/50 border-gray-700/50'
+                        : 'bg-gray-50 border-gray-200'
+                    )}>
+                      <div className="mb-4">
+                        <p className={clsx(
+                          'font-medium mb-2',
+                          darkMode ? 'text-gray-300' : 'text-gray-700'
+                        )}>Missing Topics:</p>
+                        <ul className="list-disc pl-5 space-y-1">
+                          {analysis.seo.contentGaps.missingTopics.map((topic: string, index: number) => (
+                            <li key={index} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                              {topic}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div>
+                        <p className={clsx(
+                          'font-medium mb-2',
+                          darkMode ? 'text-gray-300' : 'text-gray-700'
+                        )}>Competitor Keywords:</p>
+                        <ul className="list-disc pl-5 space-y-1">
+                          {analysis.seo.contentGaps.competitorKeywords.map((keyword: string, index: number) => (
+                            <li key={index} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>
+                              {keyword}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
                   </div>
-                  <button 
-                    className={clsx(
-                      "p-1 transition-colors",
-                      darkMode 
-                        ? "text-gray-400 hover:text-blue-400" 
-                        : "text-gray-600 hover:text-blue-600"
-                    )}
-                    onClick={() => handleCopy(formatSectionContent(analysis.seo.recommendations, 'recommendations'), 'seoRecommendations')}
-                  >
-                    {copiedSections['seoRecommendations'] ? 
-                      <FiCheck className="w-5 h-5 text-green-400" /> : 
-                      <FiCopy className="w-5 h-5" />
-                    }
-                  </button>
                 </div>
-                <ul className="list-disc list-inside text-gray-400 space-y-2">
-                  <li>Include a meta description that summarizes the content</li>
-                  <li>Use target keyword in the title, headings, and first 100 words</li>
-                  <li>Optimize images with alt text</li>
-                  <li>Use internal and external links</li>
-                  <li>Ensure fast page load times</li>
-                  <li>Use a responsive design</li>
-                  <li>Enhance content readability</li>
-                </ul>
-              </div>
-
-              {/* Content Structure */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex items-center gap-2 mb-4">
-                  <FiFileText className="w-5 h-5 text-blue-500" />
-                  <h2 className="text-lg font-semibold">Content Structure</h2>
-                </div>
-                <ul className="list-disc list-inside text-gray-400 space-y-2">
-                  {analysis.structure.headings.h1.concat(
-                    analysis.structure.headings.h2,
-                    analysis.structure.headings.h3
-                  ).map((heading: string, i: number) => (
-                    <li key={i} className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                      {heading}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* Content Gaps */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex items-center gap-2 mb-4">
-                  <FiAlertCircle className="w-5 h-5 text-blue-500" />
-                  <h2 className="text-lg font-semibold">Content Gaps</h2>
-                </div>
-                <ul className="list-disc list-inside text-gray-400 space-y-2">
-                  {analysis.seo.contentGaps.missingTopics.map((topic: string, i: number) => (
-                    <li key={i} className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                      {topic}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* Improvement Suggestions */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-2">
-                    <FiFileText className="w-5 h-5 text-blue-500" />
-                    <h2 className="text-lg font-semibold">Improvement Suggestions</h2>
-                  </div>
-                  <button 
-                    className={clsx(
-                      "p-1 transition-colors",
-                      darkMode 
-                        ? "text-gray-400 hover:text-blue-400" 
-                        : "text-gray-600 hover:text-blue-600"
-                    )}
-                    onClick={() => handleCopy(formatSectionContent(analysis.improvementSuggestions.content, 'improvements'), 'improvements')}
-                  >
-                    {copiedSections['improvements'] ? 
-                      <FiCheck className="w-5 h-5 text-green-400" /> : 
-                      <FiCopy className="w-5 h-5" />
-                    }
-                  </button>
-                </div>
-                
-                {/* Content Improvements */}
-                <div className="mb-4">
-                  <h5 className={clsx(
-                    "text-sm font-medium",
-                    darkMode ? "text-gray-400" : "text-gray-700"
-                  )}>
-                    Content Improvements
-                  </h5>
-                  <ul className="list-disc list-inside text-gray-400 space-y-2">
-                    {analysis.improvementSuggestions?.content?.map((suggestion: any, i: number) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className={clsx(
-                          "px-2 py-0.5 text-xs rounded-md font-medium",
-                          suggestion.priority === 'high' ? 
-                            darkMode ? "bg-rose-500/20 text-rose-300 border border-rose-500/30" : 
-                            "bg-rose-500/20 text-rose-300 border border-rose-500/30" :
-                          suggestion.priority === 'medium' ? 
-                            darkMode ? "bg-amber-500/20 text-amber-300 border border-amber-500/30" : 
-                            "bg-amber-500/20 text-amber-300 border border-amber-500/30" :
-                          darkMode ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : 
-                          "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                        )}>
-                          {suggestion.priority}
-                        </span>
-                        <span className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                          {suggestion.suggestion}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                {/* Style Improvements */}
-                <div className="mb-4">
-                  <h5 className={clsx(
-                    "text-sm font-medium",
-                    darkMode ? "text-gray-400" : "text-gray-700"
-                  )}>
-                    Style Improvements
-                  </h5>
-                  <ul className="list-disc list-inside text-gray-400 space-y-2">
-                    {analysis.improvementSuggestions?.style?.map((suggestion: any, i: number) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className={clsx(
-                          "px-2 py-0.5 text-xs rounded-md font-medium",
-                          suggestion.priority === 'high' ? 
-                            darkMode ? "bg-rose-500/20 text-rose-300 border border-rose-500/30" : 
-                            "bg-rose-500/20 text-rose-300 border border-rose-500/30" :
-                          suggestion.priority === 'medium' ? 
-                            darkMode ? "bg-amber-500/20 text-amber-300 border border-amber-500/30" : 
-                            "bg-amber-500/20 text-amber-300 border border-amber-500/30" :
-                          darkMode ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : 
-                          "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                        )}>
-                          {suggestion.priority}
-                        </span>
-                        <span className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                          {suggestion.suggestion}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                {/* SEO Improvements */}
-                <div>
-                  <h5 className={clsx(
-                    "text-sm font-medium",
-                    darkMode ? "text-gray-400" : "text-gray-700"
-                  )}>
-                    SEO Improvements
-                  </h5>
-                  <ul className="list-disc list-inside text-gray-400 space-y-2">
-                    {analysis.improvementSuggestions?.seo?.map((suggestion: any, i: number) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className={clsx(
-                          "px-2 py-0.5 text-xs rounded-md font-medium",
-                          suggestion.priority === 'high' ? 
-                            darkMode ? "bg-rose-500/20 text-rose-300 border border-rose-500/30" : 
-                            "bg-rose-500/20 text-rose-300 border border-rose-500/30" :
-                          suggestion.priority === 'medium' ? 
-                            darkMode ? "bg-amber-500/20 text-amber-300 border border-amber-500/30" : 
-                            "bg-amber-500/20 text-amber-300 border border-amber-500/30" :
-                          darkMode ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : 
-                          "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                        )}>
-                          {suggestion.priority}
-                        </span>
-                        <span className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                          {suggestion.suggestion}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-
-              {/* General Improvements Section */}
-              <div className={`${darkMode ? 'bg-[#2c2e33]' : 'bg-white shadow-md'} rounded-lg p-4 relative`}>
-                <div className="flex items-center gap-2 mb-4">
-                  <FiFileText className="w-5 h-5 text-blue-500" />
-                  <h2 className="text-lg font-semibold">General Improvements</h2>
-                </div>
-
-                {/* Priority Improvements */}
-                <div className="mb-4">
-                  <h5 className={clsx(
-                    "text-sm font-medium",
-                    darkMode ? "text-gray-400" : "text-gray-700"
-                  )}>
-                    Priority Improvements
-                  </h5>
-                  <ul className="list-disc list-inside text-gray-400 space-y-2">
-                    {analysis.improvements?.priority?.map((improvement: string, i: number) => (
-                      <li key={i} className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                        {improvement}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                {/* Additional Improvements */}
-                <div>
-                  <h5 className={clsx(
-                    "text-sm font-medium",
-                    darkMode ? "text-gray-400" : "text-gray-700"
-                  )}>
-                    Additional Improvements
-                  </h5>
-                  <ul className="list-disc list-inside text-gray-400 space-y-2">
-                    {analysis.improvements?.additional?.map((improvement: string, i: number) => (
-                      <li key={i} className={darkMode ? "text-gray-300" : "text-gray-900"}>
-                        {improvement}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </div>
+              </motion.div>
+            )}
+          </motion.div>
+        )}
+        {analysis && (
+          <div className="mt-6 flex justify-end">
+            <button
+              onClick={handleTransferToGenerator}
+              className={clsx(
+                'flex items-center gap-2 px-6 py-2.5 rounded-xl font-medium transition-all',
+                darkMode
+                  ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                  : 'bg-purple-500 hover:bg-purple-600 text-white',
+                'focus:ring-2 focus:ring-purple-500/20'
+              )}
+            >
+              <Wand2 className="w-5 h-5" />
+              Generate Content from Analysis
+            </button>
           </div>
         )}
       </div>

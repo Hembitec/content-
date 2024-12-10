@@ -318,21 +318,30 @@ const systemPrompt = `You are an advanced content optimization AI. Analyze the p
   }
 }`;
 
+const MAX_RETRIES = 3;
+const INITIAL_TIMEOUT = 60000; // 60 seconds
+const BACKOFF_MULTIPLIER = 1.5;
+
 export const analyzeContent = async (
   content: string,
   apiKey: string
 ): Promise<ContentOptimizationResponse> => {
-  try {
-    const instance = axios.create({
-      timeout: 30000,
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
+  let retryCount = 0;
+  let currentTimeout = INITIAL_TIMEOUT;
 
-    const response = await instance.post(
-      `${GEMINI_API_URL}?key=${apiKey}`,
-      {
+  while (retryCount < MAX_RETRIES) {
+    try {
+      console.log(`Attempt ${retryCount + 1} of ${MAX_RETRIES}...`);
+      console.log('Starting content analysis with Gemini API...');
+      
+      const instance = axios.create({
+        timeout: currentTimeout,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      const requestData = {
         contents: [{
           parts: [{
             text: `${systemPrompt}\n\nAnalyze and optimize the following content:\n\n${content}`
@@ -345,53 +354,104 @@ export const analyzeContent = async (
           topP: 1,
           topK: 1
         }
-      }
-    );
+      };
 
-    if (!response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-      throw new Error('Invalid response from Gemini API');
-    }
+      console.log('Making API request to Gemini...');
+      const response = await instance.post(
+        `${GEMINI_API_URL}?key=${apiKey}`,
+        requestData
+      );
 
-    const rawText = response.data.candidates[0].content.parts[0].text.trim();
-    
-    try {
-      const result = JSON.parse(rawText);
+      console.log('Received response from Gemini API');
+
+      if (!response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        console.error('Invalid response structure:', response.data);
+        throw new Error('Invalid response from Gemini API');
+      }
+
+      const rawText = response.data.candidates[0].content.parts[0].text.trim();
       
-      // Validate required fields
-      if (!result.keywords?.main || !result.structure || !result.seo || !result.improvements) {
-        throw new Error('Missing required analysis fields');
+      try {
+        console.log('Attempting to parse response as JSON...');
+        const result = JSON.parse(rawText);
+        
+        // Validate required fields
+        if (!result.keywords?.main || !result.structure || !result.seo || !result.improvements) {
+          console.error('Missing required fields in result:', result);
+          throw new Error('Missing required analysis fields');
+        }
+
+        // Additional validation for meaningful results
+        if (result.keywords.main.length < 3 || result.keywords.lsi.length < 3) {
+          console.error('Insufficient keyword analysis:', result.keywords);
+          throw new Error('Content is too short for meaningful analysis');
+        }
+
+        // Validate target keyword exists and is meaningful
+        if (!result.targetKeyword || result.targetKeyword.length < 3) {
+          console.error('Invalid target keyword:', result.targetKeyword);
+          throw new Error('Could not determine main topic of content');
+        }
+        
+        console.log('Successfully parsed and validated response');
+        return result;
+      } catch (parseError) {
+        console.error('Error parsing initial JSON:', parseError);
+        console.log('Attempting to extract JSON from response...');
+        
+        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          console.error('No JSON found in response');
+          throw new Error('Could not find valid JSON in response');
+        }
+        
+        const result = JSON.parse(jsonMatch[0]);
+        
+        if (!result.keywords?.main || !result.structure || !result.seo || !result.improvements) {
+          console.error('Missing required fields in extracted JSON:', result);
+          throw new Error('Missing required analysis fields');
+        }
+
+        // Additional validation for meaningful results
+        if (result.keywords.main.length < 3 || result.keywords.lsi.length < 3) {
+          console.error('Insufficient keyword analysis:', result.keywords);
+          throw new Error('Content is too short for meaningful analysis');
+        }
+
+        // Validate target keyword exists and is meaningful
+        if (!result.targetKeyword || result.targetKeyword.length < 3) {
+          console.error('Invalid target keyword:', result.targetKeyword);
+          throw new Error('Could not determine main topic of content');
+        }
+        
+        console.log('Successfully parsed and validated extracted JSON');
+        return result;
+      }
+    } catch (error: any) {
+      console.error(`Attempt ${retryCount + 1} failed:`, error);
+      
+      if (error.response?.status === 403) {
+        throw new Error('Invalid API key or unauthorized access');
       }
       
-      return result;
-    } catch (parseError) {
-      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('Could not find valid JSON in response');
+      if (retryCount < MAX_RETRIES - 1) {
+        retryCount++;
+        currentTimeout = Math.floor(currentTimeout * BACKOFF_MULTIPLIER);
+        console.log(`Retrying with timeout ${currentTimeout}ms...`);
+        continue;
       }
       
-      const result = JSON.parse(jsonMatch[0]);
-      
-      if (!result.keywords?.main || !result.structure || !result.seo || !result.improvements) {
-        throw new Error('Missing required analysis fields');
+      if (error.code === 'ERR_NETWORK') {
+        throw new Error('Network error. Please check your internet connection and try again.');
       }
       
-      return result;
+      if (error.response?.data?.error) {
+        throw new Error(`API Error: ${error.response.data.error.message}`);
+      }
+      
+      throw new Error(error.message || 'Failed to analyze content. Please try again.');
     }
-  } catch (error: any) {
-    console.error('Error analyzing content:', error);
-    
-    if (error.response?.status === 403) {
-      throw new Error('Invalid API key or unauthorized access');
-    }
-    
-    if (error.code === 'ERR_NETWORK') {
-      throw new Error('Network error. Please check your internet connection and try again.');
-    }
-    
-    if (error.response?.data?.error) {
-      throw new Error(`API Error: ${error.response.data.error.message}`);
-    }
-    
-    throw new Error(error.message || 'Failed to analyze content. Please try again.');
   }
+
+  throw new Error('Maximum retry attempts reached. Please try again later.');
 };

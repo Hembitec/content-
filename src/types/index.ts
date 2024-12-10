@@ -9,6 +9,7 @@ export interface Tool {
   title: string;
   description: string;
   icon: string;
+  path: string;
 }
 
 export interface Testimonial {
